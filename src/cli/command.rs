@@ -44,11 +44,21 @@ impl Command {
             Command::Help => {
                 cli::help::render();
             }
-            Command::Init => {}
-            Command::New => {}
-            Command::Append { text } => {}
-            Command::Delete => {}
-            Command::Read => {}
+            Command::Init => {
+                println!("not implemented yet")
+            }
+            Command::New => {
+                println!("not implemented yet")
+            }
+            Command::Append { text } => {
+                println!("not implemented yet")
+            }
+            Command::Delete => {
+                println!("not implemented yet")
+            }
+            Command::Read => {
+                println!("not implemented yet")
+            }
             _ => {}
         }
     }

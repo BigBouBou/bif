@@ -4,4 +4,6 @@ pub struct Note {
     pub id: NoteId,
 }
 
-pub struct NoteId {}
+pub struct NoteId {
+    pub value: String,
+}
