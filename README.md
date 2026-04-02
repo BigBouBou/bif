@@ -1,15 +1,15 @@
-# BIF (Before I Forget)
+# bif
 
-BIF is a lazy CLI note-taking app that stores each note as a Markdown (`.md`) file and organizes notes into a *chain* (like pages in a book). The app always points to a *current note*, so you can quickly capture thoughts without leaving the terminal.
+bif is a lazy CLI note-taking app that stores each note as a Markdown (`.md`) file and organizes notes into a *chain* (like pages in a book). The app always points to a *current note*, so you can quickly capture thoughts without leaving the terminal.
 
 ---
 
 ## Table of Contents
 
-- [BIF (Before I Forget)](#bif-before-i-forget)
+- [bif](#bif)
   - [Table of Contents](#table-of-contents)
   - [Project Goals](#project-goals)
-  - [User Model (What BIF is)](#user-model-what-bif-is)
+  - [User Model (What bif is)](#user-model-what-bif-is)
   - [Architecture Overview](#architecture-overview)
   - [Module Responsibilities](#module-responsibilities)
   - [On-Disk Storage Layout](#on-disk-storage-layout)
@@ -31,7 +31,7 @@ BIF is a lazy CLI note-taking app that stores each note as a Markdown (`.md`) fi
 
 ---
 
-## User Model (What BIF is)
+## User Model (What bif is)
 
 ### Definitions
 
@@ -51,7 +51,7 @@ BIF is a lazy CLI note-taking app that stores each note as a Markdown (`.md`) fi
 
 ## Architecture Overview
 
-BIF follows a simple layered architecture:
+bif follows a simple layered architecture:
 
 1. **CLI layer**: turns raw command-line arguments into a structured command; prints output and help.
 2. **Application layer (Runner)**: orchestrates a command execution (load state → apply domain logic → read/write notes → save state).
