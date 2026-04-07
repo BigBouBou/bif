@@ -2,64 +2,56 @@
 use crate::cli;
 
 pub enum Command {
-    Help,
+    HELP,
     // Shows the help message
-    Init,
-    // Intialises the current note chain (new note chain)
-    // The app now points to a new note named "1"
-    New,
-    // Creates a new note in the current note chain
-    // The app now points to the new note
-    Append { text: String },
-    // Appends content to the current note
-    // The app now points to the same note
-    Delete,
-    // Deletes the current note
-    // The app now points to the previous note
-    Read,
-    // Reads the current note, and shows its content in the CLI
-    // The app now points to the same note
+    INIT,
+    // Intialises a new .bif file.
+    TRACK,
+    // Tracks an existing .bif file.
+    NEW,
+    //Create a new entry.
+    DELETE,
+    // Deletes the last entry, or the selected entry
+    READ,
+    // Reads the current .bif file in its entirety
 }
 
 impl Command {
     pub fn parse(input: &Vec<String>) -> Option<Command> {
         if input.is_empty() {
-            return Some(Command::Help);
+            return Some(Command::HELP);
         }
         match input[0].as_str() {
-            "help" => Some(Command::Help),
-            "init" => Some(Command::Init),
-            "new" => Some(Command::New),
-            "append" => Some(Command::Append {
-                text: input[1].clone(),
-            }),
-            "delete" => Some(Command::Delete),
-            "read" => Some(Command::Read),
+            "help" => Some(Command::HELP),
+            "init" => Some(Command::INIT),
+            "track" => Some(Command::TRACK),
+            "new" => Some(Command::NEW),
+            "delete" => Some(Command::DELETE),
+            "read" => Some(Command::READ),
             _ => None,
         }
     }
 
     pub fn execute(&self) {
         match self {
-            Command::Help => {
+            Command::HELP => {
                 cli::help::render();
             }
-            Command::Init => {
+            Command::INIT => {
                 println!("not implemented yet")
             }
-            Command::New => {
+            Command::TRACK => {
                 println!("not implemented yet")
             }
-            Command::Append { text } => {
+            Command::NEW => {
                 println!("not implemented yet")
             }
-            Command::Delete => {
+            Command::DELETE => {
                 println!("not implemented yet")
             }
-            Command::Read => {
+            Command::READ => {
                 println!("not implemented yet")
             }
-            _ => {}
         }
     }
 }
