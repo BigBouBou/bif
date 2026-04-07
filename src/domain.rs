@@ -1,3 +1,3 @@
 pub mod chain;
-pub mod note;
+pub mod entry;
 pub mod state;
