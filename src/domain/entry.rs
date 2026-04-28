@@ -51,8 +51,7 @@ impl Entry {
     /// - Tags are stored as comma-separated values.
     pub fn to_record(&self) -> String {
         let stamp = self.stamp.to_record();
-        let body = escape_field(&self.body);
-        /// REVIEW - what is escape field?
+        let body = escape_field(&self.body); // REVIEW - Is it necessary to escape the body?
         let tags = if self.tags.is_empty() {
             String::new()
         } else {
@@ -254,9 +253,6 @@ fn escape_field(s: &str) -> String {
     out
 }
 
-/// Unescapes a field previously produced by `escape_field`.
-///
-/// Returns an error string if it finds an unknown escape sequence or a trailing `\` with nothing after it.
 fn unescape_field(s: &str) -> Result<String, String> {
     let mut out = String::with_capacity(s.len());
     let mut it = s.chars();

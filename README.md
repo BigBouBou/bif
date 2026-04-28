@@ -1,6 +1,6 @@
 # bif
 
-bif is a lazy CLI note-taking app that stores each note as a Markdown (`.md`) file and organizes notes into a *chain* (like pages in a book). The app always points to a *current note*, so you can quickly capture thoughts without leaving the terminal.
+bif is a lazy CLI note-taking app that stores each note as timestamped entry in a .bif file. The app tracks a single .bif file and allows the user to quickly capture thoughts as short entries without leaving the terminal, or taking time to organise the files attributed.
 
 ---
 
@@ -24,9 +24,9 @@ bif is a lazy CLI note-taking app that stores each note as a Markdown (`.md`) fi
 
 ## Project Goals
 
-- Provide **fast** CLI note capture: init → write → read → create next page.
-- Keep storage **simple and transparent**: plain `.md` files on disk.
-- Maintain a clear concept of a **chain** (ordered notes) and a **current note**.
+- Provide **fast** CLI note capture: init → write → read → write → read → ... 
+- Keep storage **simple and transparent**: logged entries in a simple .bif file
+- Maintain a clear concept of a log: Entries are timestamped and follow each other
 - Use a clean architecture that stays approachable for a beginner Rust project.
 
 ---
@@ -35,17 +35,16 @@ bif is a lazy CLI note-taking app that stores each note as a Markdown (`.md`) fi
 
 ### Definitions
 
-- **Note**: one Markdown file, e.g. `1.md`.
-- **Chain**: an ordered list of notes which the application treats as linked pages (like a book).
-- **Current note**: the note that commands like `append` and `read` operate on.
+- **Entry**: A stamped line in a bif file.
+- **bif file**: A log of entries made by the user.
+- **Tracked bif file**: The log that is currently tracked by the app. It is the file in which new entries will be entered
 
 ### Example usage (conceptual)
 
-- `bif init` → create the chain and first note `1.md` and point to it
-- `bif append "hello"` → add content to current note
-- `bif new` → create `2.md` and point to it
-- `bif read` → print current note to the terminal
-- `bif delete` → remove current note and point to the previous note
+- `bif init` → create a new bif file, track it. By default, this creates `log.bif`
+- `bif new "hello"` → create a new entry in the log file, and write "hello" in it. This command can be shortened to `bif hello`
+- `bif read` → print current log to the terminal. This command has different parameters that determine the formating and amount of output generated.
+- `bif delete` → remove last entry or a specific entry from a log file.
 
 ---
 
@@ -55,8 +54,8 @@ bif follows a simple layered architecture:
 
 1. **CLI layer**: turns raw command-line arguments into a structured command; prints output and help.
 2. **Application layer (Runner)**: orchestrates a command execution (load state → apply domain logic → read/write notes → save state).
-3. **Domain layer**: defines what a note/chain/state *are* and enforces rules (invariants). No filesystem logic here.
-4. **Storage layer**: reads/writes `.md` files and the state file on disk.
+3. **Domain layer**: defines what a Entry/Log/State *are* and enforces rules (invariants). No filesystem logic here.
+4. **Storage layer**: reads/writes `.bif` files and the state file on disk.
 
 ---
 
