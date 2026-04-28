@@ -3,12 +3,12 @@ use crate::domain::domain_error::DomainError;
 /// Normalizes the record filename for `bif init`.
 ///
 /// Rules:
-/// - No name => `Record.bif`
+/// - No name => `log.bif`
 /// - Empty after trim => error
 /// - path separators => error
 /// - `name` without `.bif` => append `.bif`
-pub fn normalize_record_filename(name: Option<&str>) -> Result<String, DomainError> {
-    let default_name = "record.bif";
+pub fn normalize_log_filename(name: Option<&str>) -> Result<String, DomainError> {
+    let default_name = "log.bif";
 
     let raw = match name {
         None => return Ok(default_name.to_string()),
@@ -18,14 +18,14 @@ pub fn normalize_record_filename(name: Option<&str>) -> Result<String, DomainErr
     if raw.is_empty() {
         return Err(DomainError::InvalidRecordName {
             name: raw.to_string(),
-            reason: "record name cannot be empty".to_string(),
+            reason: "new log name cannot be empty".to_string(),
         });
     }
 
     if raw.contains('/') || raw.contains('\\') {
         return Err(DomainError::InvalidRecordName {
             name: raw.to_string(),
-            reason: "record name must not contain path separators".to_string(),
+            reason: "new log name must not contain path separators".to_string(),
         });
     }
 

@@ -7,7 +7,6 @@ pub struct Entry {
 }
 
 impl Entry {
-    /// Creates a new `Entry` with the given `stamp` and body `text`.
     pub fn new(stamp: Stamp, text: String) -> Entry {
         Entry {
             stamp,
@@ -19,7 +18,7 @@ impl Entry {
     /// INVARIANTS:
     /// - `stamp` is valid (`Stamp::validate`)
     /// - `body` must be non-empty after trimming
-    /// - Each tag must be non-empty after trimming and must not contain `,`
+    /// -  must not contain `,`
     pub fn validate(&self) -> Result<(), EntryParseError> {
         self.stamp.validate()?;
 
@@ -39,7 +38,7 @@ impl Entry {
         Ok(())
     }
 
-    /// Converts this entry to a single-line record string.
+    /// Converts this entry to a record string one-liner.
     ///
     /// Record format:
     ///
@@ -51,14 +50,14 @@ impl Entry {
     /// - Tags are stored as comma-separated values.
     pub fn to_record(&self) -> String {
         let stamp = self.stamp.to_record();
-        let body = escape_field(&self.body); // REVIEW - Is it necessary to escape the body?
         let tags = if self.tags.is_empty() {
             String::new()
         } else {
             self.tags.join(",")
         };
+        let body = escape_field(&self.body);
 
-        format!("{stamp}\t{body}\t{tags}")
+        format!("{stamp}\t{tags}\t{body}")
     }
 
     /// Parses a record string into an `Entry`.
@@ -71,14 +70,14 @@ impl Entry {
     pub fn from_record(line: &str) -> Result<Entry, EntryParseError> {
         let mut parts = line.splitn(3, '\t');
         let stamp_part = parts.next().unwrap_or("");
-        let body_part = parts.next().ok_or(EntryParseError::InvalidEntryFormat {
-            expected: "STAMP<TAB>BODY<TAB>TAGS",
-            got: line.to_string(),
-        })?;
         let tags_part = parts.next().ok_or(EntryParseError::InvalidEntryFormat {
-            expected: "STAMP<TAB>BODY<TAB>TAGS",
+            expected: "STAMP<TAB>TAGS<TAB>BODY",
             got: line.to_string(),
         })?; // REVIEW - tag not necessary?
+        let body_part = parts.next().ok_or(EntryParseError::InvalidEntryFormat {
+            expected: "STAMP<TAB>TAGS<TAB>BODY",
+            got: line.to_string(),
+        })?;
 
         if stamp_part.is_empty() {
             return Err(EntryParseError::InvalidEntryFormat {
@@ -86,18 +85,18 @@ impl Entry {
                 got: line.to_string(),
             });
         }
-
         let stamp = Stamp::from_record(stamp_part)?;
-        let body = unescape_field(body_part).map_err(|reason| EntryParseError::InvalidEscape {
-            field: "body",
-            reason,
-        })?;
 
         let tags: Vec<String> = if tags_part.is_empty() {
             Vec::new()
         } else {
             tags_part.split(',').map(|s| s.to_string()).collect()
         };
+
+        let body = unescape_field(body_part).map_err(|reason| EntryParseError::InvalidEscape {
+            field: "body",
+            reason,
+        })?;
 
         let entry = Entry { stamp, body, tags };
         entry.validate()?;
@@ -130,7 +129,6 @@ impl Stamp {
         }
 
         if let Some(source) = &self.source {
-            //REVIEW - Should be string?
             if source.trim().is_empty() {
                 return Err(EntryParseError::EmptySource);
             }
@@ -144,8 +142,6 @@ impl Stamp {
         Ok(())
     }
 
-    /// Parses a stamp record string into a `Stamp`.
-    ///
     /// Stamp record format:
     ///
     /// <TIMESTAMP>|<LEVEL>|<SOURCE?>

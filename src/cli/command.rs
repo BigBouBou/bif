@@ -3,7 +3,7 @@ use crate::{cli, domain, storage};
 pub enum Command {
     HELP,
     // Shows the help message
-    INIT { name_of_new_record: Option<String> },
+    INIT { name_of_new_log: Option<String> },
     // Intialises a new .bif file.
     TRACK,
     // Tracks an existing .bif file.
@@ -31,10 +31,10 @@ impl Command {
                 // - More than one => invalid
                 match input.len() {
                     1 => Some(Command::INIT {
-                        name_of_new_record: None,
+                        name_of_new_log: None,
                     }),
                     2 => Some(Command::INIT {
-                        name_of_new_record: Some(input[1].clone()),
+                        name_of_new_log: Some(input[1].clone()),
                     }),
                     _ => None,
                 }
@@ -57,11 +57,10 @@ impl Command {
                 Ok(())
             }
 
-            Command::INIT { name_of_new_record } => {
+            Command::INIT { name_of_new_log } => {
                 // Normalize/validate at the domain boundary.
-                let file_name = domain::record_filename::normalize_record_filename(
-                    name_of_new_record.as_deref(),
-                )?;
+                let file_name =
+                    domain::log_filename::normalize_log_filename(name_of_new_log.as_deref())?;
 
                 // Storage operation: create the file in the current working directory.
                 //

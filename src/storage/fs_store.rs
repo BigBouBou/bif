@@ -26,7 +26,6 @@ pub fn create_empty_record_file_in_cwd(file_name: &str) -> io::Result<PathBuf> {
         .map(|_file| path)
 }
 
-/// Validates that `file_name` is safe to create in the current directory.
 fn validate_file_name(file_name: &str) -> io::Result<()> {
     if file_name.trim().is_empty() {
         return Err(io::Error::new(
