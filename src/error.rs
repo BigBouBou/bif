@@ -1,4 +1,4 @@
-// AppError + Result
+// LEGACY - to remove
 
 use std::fmt;
 use std::path::PathBuf;

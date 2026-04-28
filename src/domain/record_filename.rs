@@ -4,12 +4,11 @@ use crate::domain::domain_error::DomainError;
 ///
 /// Rules:
 /// - No name => `Record.bif`
-/// - Name is trimmed
 /// - Empty after trim => error
-/// - Disallow path separators to keep records in the current directory
+/// - path separators => error
 /// - `name` without `.bif` => append `.bif`
 pub fn normalize_record_filename(name: Option<&str>) -> Result<String, DomainError> {
-    let default_name = "Record.bif";
+    let default_name = "record.bif";
 
     let raw = match name {
         None => return Ok(default_name.to_string()),

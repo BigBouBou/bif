@@ -1,6 +1,5 @@
 use crate::cli::cli_error::CliError;
 use crate::{cli, domain, storage};
-
 pub enum Command {
     HELP,
     // Shows the help message
