@@ -1,10 +1,63 @@
 # bif
 
-`bif` est une mini app CLI de prise de notes « lazy ».
+`bif` est une mini app CLI de prise de notes « lazy » (Before I Forget).
 
 - Les notes sont des **records d’une ligne** ajoutés dans un fichier `.bif`.
 - Par défaut, le fichier suivi est `log.bif`.
-- Tu peux **créer plusieurs fichiers `.bif`** et choisir lequel est « tracké ».
+- Tu peux **créer plusieurs fichiers `.bif`** et choisir lequel est « tracké » (par répertoire).
+
+## Installation
+
+### Prérequis
+
+- Rust toolchain (stable) + Cargo : https://rustup.rs
+
+Vérifie que tout est OK :
+
+```sh
+rustc --version
+cargo --version
+```
+
+### Installer depuis le repo (recommandé)
+
+Le binaire `bif` s’installe via Cargo :
+
+```sh
+cargo install --git https://github.com/BigBouBou/bif
+```
+
+Puis vérifie :
+
+```sh
+bif help
+```
+
+Notes :
+- Si `bif` n’est pas trouvé, assure-toi que le dossier des binaires Cargo est dans ton `PATH`.
+  - Linux/macOS : `~/.cargo/bin`
+  - Windows : `%USERPROFILE%\.cargo\bin`
+- Pour mettre à jour : relance la commande `cargo install --git ...`.
+
+### Build local (si tu veux contribuer)
+
+```sh
+git clone https://github.com/BigBouBou/bif
+cd bif
+cargo build
+```
+
+Lancer sans installer :
+
+```sh
+cargo run -- help
+```
+
+Installer depuis une copie locale :
+
+```sh
+cargo install --path .
+```
 
 ## Format des notes
 
@@ -29,7 +82,11 @@ Notes importantes :
 
 ## Utilisation rapide
 
-- Initialiser (crée `log.bif` si besoin) :
+### Démarrage en 30 secondes
+
+Dans un dossier (par exemple un projet), initialise un log `.bif` et commence à écrire.
+
+- Initialiser (crée `log.bif` dans le dossier courant si besoin) :
   - `bif init`
 
 - Ajouter une note :
@@ -99,16 +156,21 @@ Providers intégrés (IDs disponibles) :
 
 ## Plusieurs fichiers `.bif`
 
-Le projet permet de gérer plusieurs logs `.bif` (un par contexte, projet, etc.).
+Le projet permet de gérer plusieurs logs `.bif` (un par contexte, projet, etc.) **dans un même dossier**.
 
-- Créer un nouveau fichier `.bif`
-- Choisir quel fichier est actuellement **tracké**
+Commandes :
 
-Les commandes exactes peuvent varier selon la version, mais l’idée est toujours la même :
+- Créer un nouveau fichier `.bif` vide dans le dossier courant :
+  - `bif init` (crée `log.bif`)
+  - `bif init work.bif` (crée `work.bif`)
 
-- un seul fichier `.bif` est la cible par défaut
-- toutes les captures (`bif ...`) écrivent dans ce fichier
+- Choisir quel fichier est actuellement **tracké** (cible par défaut) :
+  - `bif track work.bif`
+
+Le fichier tracké est enregistré dans le dossier courant dans `.bif-tracked`.
+
+> Important : le tracking est **par répertoire**. Si tu `cd` ailleurs, il faudra init/track dans ce nouveau dossier.
 
 ## Objectif
 
-Rendre la prise de note **instantanée** depuis le terminal, avec un stockage lisible, simple à sauvegarder, et sans friction d’organisation.
+Prise de note **instantanée** depuis le terminal, avec un stockage lisible, simple à sauvegarder, aucune friction d’organisation.
