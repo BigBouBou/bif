@@ -109,9 +109,18 @@ You are updating `CONTEXT.md` for your future self (another instance of you). Fo
   - TODO: allow tracking by relative/absolute path? (decision)
   - TODO: error message when no tracked file for `new/read/delete`
 - Implement `read`:
-  - DONE: `read` prints tracked file contents as-is (raw text)
+  - DONE: `read` supports:
+    - `read` => print entire tracked file (raw)
+    - `read 1` / `read -1` => print last record only
+    - `read 2` => print last 2 records
+    - `read -2` => print 2nd-to-last record only
+  - Storage strategy: read whole file, slice `.lines()`, print raw record line(s).
 - Implement `delete`:
-  - DONE: `delete` removes last record line by reading whole file, dropping last `.lines()` element, rewriting file (empty file => error "no entries to delete").
+  - DONE: `delete` supports:
+    - `delete` / `delete 1` / `delete -1` => delete last record
+    - `delete 2` => delete last 2 records
+    - `delete -2` => delete 2nd-to-last record
+  - Storage strategy: read whole file, manipulate `.lines()`, rewrite file (errors on empty/out-of-range).
 
 ## 5) Design constraints I should remember
 - Keep logs as plain text `.bif` in the working directory (current `init` behavior).

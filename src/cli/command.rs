@@ -9,6 +9,22 @@ fn require_tracked_log() -> Result<String, CliError> {
         }),
     }
 }
+#[derive(Debug, Clone, Copy)]
+pub enum DeleteSpec {
+    /// Delete the last N entries. `1` == last entry.
+    CountFromEnd(usize),
+    /// Delete the Nth entry from the end. `1` == last entry, `2` == second-to-last.
+    IndexFromEnd(usize),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ReadSpec {
+    /// Read the last N entries. `1` == last entry.
+    CountFromEnd(usize),
+    /// Read the Nth entry from the end. `1` == last entry, `2` == second-to-last.
+    IndexFromEnd(usize),
+}
+
 pub enum Command {
     HELP,
     // Shows the help message
@@ -18,10 +34,10 @@ pub enum Command {
     // Tracks an existing .bif file in the current working directory.
     NEW { body: String },
     //Create a new entry.
-    DELETE,
-    // Deletes the last entry, or the selected entry
-    READ,
-    // Reads the current .bif file in its entirety
+    DELETE { spec: Option<DeleteSpec> },
+    // Deletes entries (default: last entry).
+    READ { spec: Option<ReadSpec> },
+    // Reads the current .bif file (default: entire file).
 }
 
 impl Command {
@@ -63,8 +79,68 @@ impl Command {
                     body: input[1..].join(" "),
                 })
             }
-            "delete" => Some(Command::DELETE),
-            "read" => Some(Command::READ),
+            "delete" => {
+                // Supported:
+                // - `bif delete`      => delete last entry
+                // - `bif delete 2`    => delete last 2 entries
+                // - `bif delete -2`   => delete 2nd-to-last entry
+                match input.len() {
+                    1 => Some(Command::DELETE { spec: None }),
+                    2 => {
+                        let raw = input[1].trim();
+                        if raw.is_empty() {
+                            return None;
+                        }
+
+                        let n: i64 = raw.parse().ok()?;
+                        if n == 0 {
+                            return None;
+                        }
+
+                        if n > 0 {
+                            Some(Command::DELETE {
+                                spec: Some(DeleteSpec::CountFromEnd(n as usize)),
+                            })
+                        } else {
+                            Some(Command::DELETE {
+                                spec: Some(DeleteSpec::IndexFromEnd((-n) as usize)),
+                            })
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            "read" => {
+                // Supported:
+                // - `bif read`      => print entire file
+                // - `bif read 2`    => print last 2 entries
+                // - `bif read -2`   => print 2nd-to-last entry
+                match input.len() {
+                    1 => Some(Command::READ { spec: None }),
+                    2 => {
+                        let raw = input[1].trim();
+                        if raw.is_empty() {
+                            return None;
+                        }
+
+                        let n: i64 = raw.parse().ok()?;
+                        if n == 0 {
+                            return None;
+                        }
+
+                        if n > 0 {
+                            Some(Command::READ {
+                                spec: Some(ReadSpec::CountFromEnd(n as usize)),
+                            })
+                        } else {
+                            Some(Command::READ {
+                                spec: Some(ReadSpec::IndexFromEnd((-n) as usize)),
+                            })
+                        }
+                    }
+                    _ => None,
+                }
+            }
             _ => Some(Command::NEW {
                 body: input.join(" "),
             }),
@@ -142,22 +218,64 @@ impl Command {
                 Ok(())
             }
 
-            Command::DELETE => {
+            Command::DELETE { spec } => {
                 let tracked = require_tracked_log()?;
 
-                storage::fs_store::delete_last_record_line(std::path::Path::new(&tracked))
-                    .map_err(crate::storage::storage_error::StorageError::from)?;
+                match spec {
+                    None => {
+                        storage::fs_store::delete_last_record_line(std::path::Path::new(&tracked))
+                            .map_err(crate::storage::storage_error::StorageError::from)?;
+                    }
+                    Some(DeleteSpec::CountFromEnd(n)) => {
+                        storage::fs_store::delete_last_n_record_lines(
+                            std::path::Path::new(&tracked),
+                            *n,
+                        )
+                        .map_err(crate::storage::storage_error::StorageError::from)?;
+                    }
+                    Some(DeleteSpec::IndexFromEnd(n)) => {
+                        storage::fs_store::delete_record_line_by_index_from_end(
+                            std::path::Path::new(&tracked),
+                            *n,
+                        )
+                        .map_err(crate::storage::storage_error::StorageError::from)?;
+                    }
+                }
 
                 Ok(())
             }
 
-            Command::READ => {
+            Command::READ { spec } => {
                 let tracked = require_tracked_log()?;
 
-                let contents = std::fs::read_to_string(&tracked)
-                    .map_err(crate::storage::storage_error::StorageError::from)?;
+                match spec {
+                    None => {
+                        let contents = std::fs::read_to_string(&tracked)
+                            .map_err(crate::storage::storage_error::StorageError::from)?;
+                        print!("{contents}");
+                    }
+                    Some(ReadSpec::CountFromEnd(n)) => {
+                        let lines = storage::fs_store::read_last_n_record_lines(
+                            std::path::Path::new(&tracked),
+                            *n,
+                        )
+                        .map_err(crate::storage::storage_error::StorageError::from)?;
 
-                print!("{contents}");
+                        if !lines.is_empty() {
+                            println!("{}", lines.join("\n"));
+                        }
+                    }
+                    Some(ReadSpec::IndexFromEnd(n)) => {
+                        let line = storage::fs_store::read_record_line_by_index_from_end(
+                            std::path::Path::new(&tracked),
+                            *n,
+                        )
+                        .map_err(crate::storage::storage_error::StorageError::from)?;
+
+                        println!("{line}");
+                    }
+                }
+
                 Ok(())
             }
         }

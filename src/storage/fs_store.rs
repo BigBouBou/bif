@@ -48,17 +48,24 @@ pub fn append_record_line(path: &Path, line: &str) -> io::Result<()> {
 ///
 /// Current strategy (simple): read whole file, drop last line, rewrite whole file.
 pub fn delete_last_record_line(path: &Path) -> io::Result<()> {
-    let contents = fs::read_to_string(path)?;
+    delete_last_n_record_lines(path, 1)
+}
 
-    // If file is empty (or only whitespace), treat as "nothing to delete".
-    if contents.trim().is_empty() {
+/// Deletes the last N record lines from a `.bif` file.
+///
+/// - `n == 1` matches `delete_last_record_line`.
+/// - Errors if `n` is 0 or if the file has fewer than `n` entries.
+pub fn delete_last_n_record_lines(path: &Path, n: usize) -> io::Result<()> {
+    if n == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "no entries to delete",
+            "delete count must be >= 1",
         ));
     }
 
-    let mut lines: Vec<&str> = contents.lines().collect();
+    let contents = fs::read_to_string(path)?;
+    let lines: Vec<&str> = contents.lines().collect();
+
     if lines.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -66,8 +73,57 @@ pub fn delete_last_record_line(path: &Path) -> io::Result<()> {
         ));
     }
 
-    lines.pop();
+    if n > lines.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not enough entries to delete",
+        ));
+    }
 
+    let remaining = &lines[..lines.len() - n];
+    write_lines(path, remaining)
+}
+
+/// Deletes the Nth record line from the end.
+///
+/// - `n == 1` => last entry
+/// - `n == 2` => second-to-last entry
+pub fn delete_record_line_by_index_from_end(path: &Path, n: usize) -> io::Result<()> {
+    if n == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "delete index must be >= 1",
+        ));
+    }
+
+    let contents = fs::read_to_string(path)?;
+    let lines: Vec<&str> = contents.lines().collect();
+
+    if lines.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no entries to delete",
+        ));
+    }
+
+    if n > lines.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "delete index out of range",
+        ));
+    }
+
+    let idx = lines.len() - n;
+    let remaining: Vec<&str> = lines
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, line)| if i == idx { None } else { Some(line) })
+        .collect();
+
+    write_lines(path, &remaining)
+}
+
+fn write_lines(path: &Path, lines: &[&str]) -> io::Result<()> {
     let new_contents = if lines.is_empty() {
         String::new()
     } else {
@@ -76,6 +132,73 @@ pub fn delete_last_record_line(path: &Path) -> io::Result<()> {
     };
 
     fs::write(path, new_contents)
+}
+
+/// Reads the last N record lines from a `.bif` file.
+///
+/// - `n == 1` => last entry only
+/// - Errors if `n` is 0 or if the file has fewer than `n` entries.
+pub fn read_last_n_record_lines(path: &Path, n: usize) -> io::Result<Vec<String>> {
+    if n == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "read count must be >= 1",
+        ));
+    }
+
+    let contents = fs::read_to_string(path)?;
+    let lines: Vec<&str> = contents.lines().collect();
+
+    if lines.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no entries to read",
+        ));
+    }
+
+    if n > lines.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not enough entries to read",
+        ));
+    }
+
+    Ok(lines[lines.len() - n..]
+        .iter()
+        .map(|s| s.to_string())
+        .collect())
+}
+
+/// Reads the Nth record line from the end.
+///
+/// - `n == 1` => last entry
+/// - `n == 2` => second-to-last entry
+pub fn read_record_line_by_index_from_end(path: &Path, n: usize) -> io::Result<String> {
+    if n == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "read index must be >= 1",
+        ));
+    }
+
+    let contents = fs::read_to_string(path)?;
+    let lines: Vec<&str> = contents.lines().collect();
+
+    if lines.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no entries to read",
+        ));
+    }
+
+    if n > lines.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "read index out of range",
+        ));
+    }
+
+    Ok(lines[lines.len() - n].to_string())
 }
 
 fn validate_file_name(file_name: &str) -> io::Result<()> {
