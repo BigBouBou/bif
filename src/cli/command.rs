@@ -28,15 +28,26 @@ pub enum ReadSpec {
 pub enum Command {
     HELP,
     // Shows the help message
-    INIT { name_of_new_log: Option<String> },
+    INIT {
+        name_of_new_log: Option<String>,
+    },
     // Intialises a new .bif file.
-    TRACK { name_of_log: String },
+    TRACK {
+        name_of_log: String,
+    },
     // Tracks an existing .bif file in the current working directory.
-    NEW { body: String },
+    NEW {
+        body: String,
+    },
     //Create a new entry.
-    DELETE { spec: Option<DeleteSpec> },
+    DELETE {
+        spec: Option<DeleteSpec>,
+    },
     // Deletes entries (default: last entry).
-    READ { spec: Option<ReadSpec> },
+    READ {
+        spec: Option<ReadSpec>,
+        pretty: bool,
+    },
     // Reads the current .bif file (default: entire file).
 }
 
@@ -112,13 +123,28 @@ impl Command {
             }
             "read" => {
                 // Supported:
-                // - `bif read`      => print entire file
-                // - `bif read 2`    => print last 2 entries
-                // - `bif read -2`   => print 2nd-to-last entry
-                match input.len() {
-                    1 => Some(Command::READ { spec: None }),
-                    2 => {
-                        let raw = input[1].trim();
+                // - `bif read`              => print entire file (raw records)
+                // - `bif read 2`            => print last 2 entries (raw)
+                // - `bif read -2`           => print 2nd-to-last entry (raw)
+                // - `bif read --pretty`     => print entire file (pretty)
+                // - `bif read --pretty 2`   => print last 2 entries (pretty)
+                // - `bif read --pretty -2`  => print 2nd-to-last entry (pretty)
+
+                let mut pretty = false;
+                let mut args: Vec<&str> = Vec::new();
+
+                for a in input.iter().skip(1) {
+                    if a == "--pretty" {
+                        pretty = true;
+                    } else {
+                        args.push(a);
+                    }
+                }
+
+                match args.len() {
+                    0 => Some(Command::READ { spec: None, pretty }),
+                    1 => {
+                        let raw = args[0].trim();
                         if raw.is_empty() {
                             return None;
                         }
@@ -131,10 +157,12 @@ impl Command {
                         if n > 0 {
                             Some(Command::READ {
                                 spec: Some(ReadSpec::CountFromEnd(n as usize)),
+                                pretty,
                             })
                         } else {
                             Some(Command::READ {
                                 spec: Some(ReadSpec::IndexFromEnd((-n) as usize)),
+                                pretty,
                             })
                         }
                     }
@@ -149,6 +177,19 @@ impl Command {
 
     /// Executes a command.
     pub fn execute(&self) -> Result<(), CliError> {
+        let mut out = std::io::stdout();
+        let mut err = std::io::stderr();
+        self.execute_with_io(&mut out, &mut err)
+    }
+
+    /// Executes a command, writing output to the provided writers.
+    ///
+    /// This exists primarily to make CLI behavior testable without spawning a process.
+    pub fn execute_with_io(
+        &self,
+        out: &mut dyn std::io::Write,
+        err: &mut dyn std::io::Write,
+    ) -> Result<(), CliError> {
         match self {
             Command::HELP => {
                 cli::help::render();
@@ -209,7 +250,25 @@ impl Command {
                 let stamp =
                     domain::entry::Stamp::new(timestamp, domain::entry::EntryLevel::INFO, None);
 
-                let entry = domain::entry::Entry::new(stamp, body.clone());
+                // Load global config (default if missing) and compute `_cfg_hash`.
+                let cfg = crate::cli::config::GlobalConfig::load_global()
+                    .map_err(crate::storage::storage_error::StorageError::from)?;
+                let cfg_hash = cfg.cfg_hash_hex();
+
+                // Run configured stamp providers.
+                let cwd = std::env::current_dir()
+                    .map_err(crate::storage::storage_error::StorageError::from)?;
+                let provider_ctx = crate::domain::stamp_provider::ProviderContext {
+                    stamp: stamp.clone(),
+                    cwd,
+                };
+                let reg = crate::domain::stamp_provider::Registry::default();
+                let mut meta = reg.compute_meta_for_ids(&cfg.new_stamp_ids, &provider_ctx);
+                meta.insert("_cfg_hash".to_string(), cfg_hash);
+
+                let mut entry = domain::entry::Entry::new(stamp, body.clone());
+                entry.meta = meta;
+
                 let record = entry.to_record();
 
                 storage::fs_store::append_record_line(std::path::Path::new(&tracked), &record)
@@ -245,14 +304,111 @@ impl Command {
                 Ok(())
             }
 
-            Command::READ { spec } => {
+            Command::READ { spec, pretty } => {
                 let tracked = require_tracked_log()?;
+
+                // Default behavior MUST remain: raw record lines.
+                if !pretty {
+                    match spec {
+                        None => {
+                            let contents = std::fs::read_to_string(&tracked)
+                                .map_err(crate::storage::storage_error::StorageError::from)?;
+                            write!(out, "{contents}").map_err(|e| CliError::InvalidArgs {
+                                message: format!("stdout write error: {e}"),
+                            })?;
+                        }
+                        Some(ReadSpec::CountFromEnd(n)) => {
+                            let lines = storage::fs_store::read_last_n_record_lines(
+                                std::path::Path::new(&tracked),
+                                *n,
+                            )
+                            .map_err(crate::storage::storage_error::StorageError::from)?;
+
+                            if !lines.is_empty() {
+                                writeln!(out, "{}", lines.join("\n")).map_err(|e| {
+                                    CliError::InvalidArgs {
+                                        message: format!("stdout write error: {e}"),
+                                    }
+                                })?;
+                            }
+                        }
+                        Some(ReadSpec::IndexFromEnd(n)) => {
+                            let line = storage::fs_store::read_record_line_by_index_from_end(
+                                std::path::Path::new(&tracked),
+                                *n,
+                            )
+                            .map_err(crate::storage::storage_error::StorageError::from)?;
+
+                            writeln!(out, "{line}").map_err(|e| CliError::InvalidArgs {
+                                message: format!("stdout write error: {e}"),
+                            })?;
+                        }
+                    }
+
+                    return Ok(());
+                }
+
+                // Pretty mode (presentation-layer only): parse record lines and render.
+                // Prefer config-defined meta layout; fall back to legacy stamp format.
+                let cfg = crate::cli::config::GlobalConfig::load_global()
+                    .map_err(crate::storage::storage_error::StorageError::from)?;
+                let current_cfg_hash = cfg.cfg_hash_hex();
+                let pretty_cfg = cfg.pretty.clone();
+
+                fn render_pretty_stamp_from_meta(
+                    entry: &domain::entry::Entry,
+                    pretty_cfg: &crate::cli::config::PrettyConfig,
+                ) -> String {
+                    let mut parts: Vec<String> = Vec::new();
+                    for k in &pretty_cfg.meta_keys {
+                        let v = entry.meta.get(k).cloned().unwrap_or_default();
+                        parts.push(v);
+                    }
+                    parts.join(&pretty_cfg.meta_sep)
+                }
 
                 match spec {
                     None => {
                         let contents = std::fs::read_to_string(&tracked)
                             .map_err(crate::storage::storage_error::StorageError::from)?;
-                        print!("{contents}");
+
+                        for line in contents.lines() {
+                            if line.trim().is_empty() {
+                                continue;
+                            }
+
+                            let entry = domain::entry::Entry::from_record(line).map_err(|err| {
+                                CliError::InvalidArgs {
+                                    message: format!("invalid record line: {err:?} | line: {line}"),
+                                }
+                            })?;
+
+                            if !entry.meta.is_empty() {
+                                if let Some(stored) = entry.meta.get("_cfg_hash") {
+                                    if stored != &current_cfg_hash {
+                                        writeln!(
+                                            err,
+                                            "bif: pretty: cfg hash mismatch (entry _cfg_hash={stored}, current={current_cfg_hash})"
+                                        )
+                                        .ok();
+                                    }
+                                }
+                            }
+
+                            let stamp = if !pretty_cfg.meta_keys.is_empty() {
+                                render_pretty_stamp_from_meta(&entry, &pretty_cfg)
+                            } else {
+                                domain::stamp_format::render_stamp(
+                                    &entry.stamp,
+                                    &pretty_cfg.legacy_stamp_format,
+                                )
+                            };
+                            writeln!(out, "{stamp}\t{}", entry.body).map_err(|e| {
+                                CliError::InvalidArgs {
+                                    message: format!("stdout write error: {e}"),
+                                }
+                            })?;
+                        }
                     }
                     Some(ReadSpec::CountFromEnd(n)) => {
                         let lines = storage::fs_store::read_last_n_record_lines(
@@ -261,8 +417,41 @@ impl Command {
                         )
                         .map_err(crate::storage::storage_error::StorageError::from)?;
 
-                        if !lines.is_empty() {
-                            println!("{}", lines.join("\n"));
+                        for line in lines {
+                            let entry =
+                                domain::entry::Entry::from_record(&line).map_err(|err| {
+                                    CliError::InvalidArgs {
+                                        message: format!(
+                                            "invalid record line: {err:?} | line: {line}"
+                                        ),
+                                    }
+                                })?;
+
+                            if !entry.meta.is_empty() {
+                                if let Some(stored) = entry.meta.get("_cfg_hash") {
+                                    if stored != &current_cfg_hash {
+                                        writeln!(
+                                            err,
+                                            "bif: pretty: cfg hash mismatch (entry _cfg_hash={stored}, current={current_cfg_hash})"
+                                        )
+                                        .ok();
+                                    }
+                                }
+                            }
+
+                            let stamp = if !pretty_cfg.meta_keys.is_empty() {
+                                render_pretty_stamp_from_meta(&entry, &pretty_cfg)
+                            } else {
+                                domain::stamp_format::render_stamp(
+                                    &entry.stamp,
+                                    &pretty_cfg.legacy_stamp_format,
+                                )
+                            };
+                            writeln!(out, "{stamp}\t{}", entry.body).map_err(|e| {
+                                CliError::InvalidArgs {
+                                    message: format!("stdout write error: {e}"),
+                                }
+                            })?;
                         }
                     }
                     Some(ReadSpec::IndexFromEnd(n)) => {
@@ -272,7 +461,37 @@ impl Command {
                         )
                         .map_err(crate::storage::storage_error::StorageError::from)?;
 
-                        println!("{line}");
+                        let entry = domain::entry::Entry::from_record(&line).map_err(|err| {
+                            CliError::InvalidArgs {
+                                message: format!("invalid record line: {err:?} | line: {line}"),
+                            }
+                        })?;
+
+                        if !entry.meta.is_empty() {
+                            if let Some(stored) = entry.meta.get("_cfg_hash") {
+                                if stored != &current_cfg_hash {
+                                    writeln!(
+                                        err,
+                                        "bif: pretty: cfg hash mismatch (entry _cfg_hash={stored}, current={current_cfg_hash})"
+                                    )
+                                    .ok();
+                                }
+                            }
+                        }
+
+                        let stamp = if !pretty_cfg.meta_keys.is_empty() {
+                            render_pretty_stamp_from_meta(&entry, &pretty_cfg)
+                        } else {
+                            domain::stamp_format::render_stamp(
+                                &entry.stamp,
+                                &pretty_cfg.legacy_stamp_format,
+                            )
+                        };
+                        writeln!(out, "{stamp}\t{}", entry.body).map_err(|e| {
+                            CliError::InvalidArgs {
+                                message: format!("stdout write error: {e}"),
+                            }
+                        })?;
                     }
                 }
 

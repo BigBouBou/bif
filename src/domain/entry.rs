@@ -1,9 +1,13 @@
+use std::collections::BTreeMap;
+
 pub struct EntryIndexFromEnd(pub usize);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub stamp: Stamp,
     pub body: String,
     pub tags: Vec<String>,
+    pub meta: BTreeMap<String, String>,
 }
 
 impl Entry {
@@ -12,13 +16,14 @@ impl Entry {
             stamp,
             body: text,
             tags: Vec::new(),
+            meta: BTreeMap::new(),
         }
     }
 
     /// INVARIANTS:
     /// - `stamp` is valid (`Stamp::validate`)
     /// - `body` must be non-empty after trimming
-    /// -  must not contain `,`
+    /// - tags must not be empty/whitespace and must not contain `,`
     pub fn validate(&self) -> Result<(), EntryParseError> {
         self.stamp.validate()?;
 
@@ -42,12 +47,20 @@ impl Entry {
     ///
     /// Record format:
     ///
-    /// <STAMP>\t<BODY>\t<TAG1,TAG2,...>
+    /// Legacy record format (no meta):
+    ///
+    /// <STAMP>\t<TAGS>\t<BODY>
+    ///
+    /// Extended record format (optional meta as 4th field):
+    ///
+    /// <STAMP>\t<TAGS>\t<BODY>\t<META_JSON>
     ///
     /// - `\t` as delimiter
     /// - `BODY` uses a very small escaping scheme so the record stays one line:
-    ///   `\` => `\\`, tab => `\t`, newline => `\n`, carriage return => `\r`.
+    ///   `\` => `\\`, tab => `\\t`, newline => `\\n`, carriage return => `\\r`.
     /// - Tags are stored as comma-separated values.
+    /// - `META_JSON` is JSON (object mapping string->string) and then escaped using the same field
+    ///   escaping scheme as `BODY`.
     pub fn to_record(&self) -> String {
         let stamp = self.stamp.to_record();
         let tags = if self.tags.is_empty() {
@@ -57,27 +70,39 @@ impl Entry {
         };
         let body = escape_field(&self.body);
 
-        format!("{stamp}\t{tags}\t{body}")
+        if self.meta.is_empty() {
+            format!("{stamp}\t{tags}\t{body}")
+        } else {
+            let meta_json = serde_json::to_string(&self.meta)
+                .expect("meta map must always be JSON-serializable");
+            let meta_field = escape_field(&meta_json);
+            format!("{stamp}\t{tags}\t{body}\t{meta_field}")
+        }
     }
 
     /// Parses a record string into an `Entry`.
     ///
-    /// 1. Split on `\t` into 3 fields: stamp, body, tags.
+    /// 1. Split on `\t` into 3 or 4 fields: stamp, tags, body, (optional) meta.
     /// 2. Parse the stamp with `Stamp::from_record`.
     /// 3. Unescape the body using the same escaping scheme as `to_record`.
     /// 4. Split tags on `,` (empty means "no tags").
-    /// 5. Validate the constructed entry to enforce invariants.
+    /// 5. If present, unescape meta and parse it as JSON into `BTreeMap<String,String>`.
+    /// 6. Validate the constructed entry to enforce invariants.
     pub fn from_record(line: &str) -> Result<Entry, EntryParseError> {
-        let mut parts = line.splitn(3, '\t');
+        // Backward-compatible parsing:
+        // - legacy:   STAMP<TAB>TAGS<TAB>BODY
+        // - extended: STAMP<TAB>TAGS<TAB>BODY<TAB>META_JSON
+        let mut parts = line.splitn(4, '\t');
         let stamp_part = parts.next().unwrap_or("");
         let tags_part = parts.next().ok_or(EntryParseError::InvalidEntryFormat {
-            expected: "STAMP<TAB>TAGS<TAB>BODY",
-            got: line.to_string(),
-        })?; // REVIEW - tag not necessary?
-        let body_part = parts.next().ok_or(EntryParseError::InvalidEntryFormat {
-            expected: "STAMP<TAB>TAGS<TAB>BODY",
+            expected: "STAMP<TAB>TAGS<TAB>BODY[<TAB>META_JSON]",
             got: line.to_string(),
         })?;
+        let body_part = parts.next().ok_or(EntryParseError::InvalidEntryFormat {
+            expected: "STAMP<TAB>TAGS<TAB>BODY[<TAB>META_JSON]",
+            got: line.to_string(),
+        })?;
+        let meta_part = parts.next();
 
         if stamp_part.is_empty() {
             return Err(EntryParseError::InvalidEntryFormat {
@@ -98,12 +123,36 @@ impl Entry {
             reason,
         })?;
 
-        let entry = Entry { stamp, body, tags };
+        let meta: BTreeMap<String, String> = match meta_part {
+            None => BTreeMap::new(),
+            Some(raw_meta) => {
+                let meta_json =
+                    unescape_field(raw_meta).map_err(|reason| EntryParseError::InvalidEscape {
+                        field: "meta",
+                        reason,
+                    })?;
+
+                serde_json::from_str(&meta_json).map_err(|err| {
+                    EntryParseError::InvalidMetaJson {
+                        got: meta_json,
+                        reason: err.to_string(),
+                    }
+                })?
+            }
+        };
+
+        let entry = Entry {
+            stamp,
+            body,
+            tags,
+            meta,
+        };
         entry.validate()?;
         Ok(entry)
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stamp {
     pub timestamp: String,
     pub level: EntryLevel,
@@ -133,9 +182,7 @@ impl Stamp {
                 return Err(EntryParseError::EmptySource);
             }
             if source.contains('|') {
-                return Err(EntryParseError::InvalidSourceContainsDelimiter {
-                    source: source.clone(),
-                });
+                return Err(EntryParseError::InvalidSourceContainsDelimiter);
             }
         }
 
@@ -185,6 +232,7 @@ impl Stamp {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryLevel {
     DEBUG,
     INFO,
@@ -213,20 +261,36 @@ impl EntryLevel {
     }
 }
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum EntryParseError {
+    #[error("invalid entry format: expected {expected}, got: {got}")]
     InvalidEntryFormat { expected: &'static str, got: String },
+
+    #[error("invalid meta JSON: {reason}; got: {got}")]
+    InvalidMetaJson { got: String, reason: String },
+
+    #[error("invalid stamp format: expected {expected}, got: {got}")]
     InvalidStampFormat { expected: &'static str, got: String },
 
+    #[error("empty timestamp")]
     EmptyTimestamp,
+    #[error("empty source")]
     EmptySource,
+    #[error("empty body")]
     EmptyBody,
+    #[error("empty tag")]
     EmptyTag,
 
+    #[error("invalid level: {got}")]
     InvalidLevel { got: String },
 
-    InvalidSourceContainsDelimiter { source: String },
+    #[error("invalid source contains delimiter '|'")]
+    InvalidSourceContainsDelimiter,
+
+    #[error("invalid tag contains comma: {tag}")]
     InvalidTagContainsComma { tag: String },
 
+    #[error("invalid escape in {field}: {reason}")]
     InvalidEscape { field: &'static str, reason: String },
 }
 
@@ -274,4 +338,53 @@ fn unescape_field(s: &str) -> Result<String, String> {
     }
 
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stamp() -> Stamp {
+        Stamp::new("123".to_string(), EntryLevel::INFO, None)
+    }
+
+    #[test]
+    fn legacy_roundtrip_unchanged() {
+        let mut e = Entry::new(stamp(), "hello\\tworld".to_string());
+        e.tags = vec!["a".to_string(), "b".to_string()];
+
+        let record = e.to_record();
+        assert!(!record.contains("\t{"));
+
+        let parsed = Entry::from_record(&record).unwrap();
+        assert_eq!(parsed.to_record(), record);
+        assert!(parsed.meta.is_empty());
+    }
+
+    #[test]
+    fn meta_roundtrip() {
+        let mut e = Entry::new(stamp(), "body".to_string());
+        e.meta.insert("k".to_string(), "v".to_string());
+
+        let record = e.to_record();
+        let parsed = Entry::from_record(&record).unwrap();
+
+        assert_eq!(parsed.meta.get("k"), Some(&"v".to_string()));
+        assert_eq!(parsed.to_record(), record);
+    }
+
+    #[test]
+    fn invalid_json_error() {
+        let line = format!(
+            "{}\t\t{}\t{}",
+            stamp().to_record(),
+            escape_field("b"),
+            escape_field("{not json")
+        );
+        let err = Entry::from_record(&line).unwrap_err();
+        match err {
+            EntryParseError::InvalidMetaJson { .. } => {}
+            other => panic!("expected InvalidMetaJson, got: {other:?}"),
+        }
+    }
 }

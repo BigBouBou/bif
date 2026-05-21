@@ -8,15 +8,24 @@
 
 ## Format des notes
 
-Chaque note est écrite sur **une seule ligne** :
+Chaque note est écrite sur **une seule ligne**.
 
-- `<stamp>` : un timestamp (date/heure)
-- `<tags>` : tags optionnels
-- `<body>` : le texte
-
-Format :
+Format (legacy, toujours supporté) :
 
 `<stamp>\t<tags>\t<body>`
+
+Format étendu (si des stamps/meta sont configurés) :
+
+`<stamp>\t<tags>\t<body>\t<meta_json>`
+
+- `<stamp>` : format interne `timestamp|LEVEL|SOURCE?` (ex: `1716400000|INFO|`).
+- `<tags>` : tags optionnels (CSV, peut être vide).
+- `<body>` : texte (échappé pour rester sur une ligne).
+- `<meta_json>` : JSON (objet string->string) contenant des stamps calculés à `new` + `_cfg_hash`.
+
+Notes importantes :
+- `bif read` (sans `--pretty`) affiche **les lignes brutes** du fichier (script-friendly).
+- `bif read --pretty` est une vue **humaine** et peut dépendre de la config globale.
 
 ## Utilisation rapide
 
@@ -26,8 +35,67 @@ Format :
 - Ajouter une note :
   - `bif new "hello"`
 
+- Lire brut (par défaut) :
+  - `bif read`
+
+- Lire en joli (vue humaine) :
+  - `bif read --pretty`
+
 - Raccourci (capture ultra rapide) :
   - `bif hello`
+
+## Configuration globale (stamps + pretty)
+
+`bif` charge une config **globale** (niveau utilisateur) en JSON.
+
+Chemin par défaut (Unix) :
+- `$XDG_CONFIG_HOME/bif/config.json` (si `XDG_CONFIG_HOME` est défini)
+- sinon `~/.config/bif/config.json`
+
+Cette config contrôle :
+- `new_stamp_ids` : quels “stamp providers” sont exécutés à `bif new` (capture-time) et stockés dans `<meta_json>`
+- `pretty.meta_keys` : quels champs de meta afficher dans `bif read --pretty` (view-time), et dans quel ordre
+
+Exemple minimal (par défaut, aucun meta affiché en pretty => fallback sur le stamp legacy) :
+
+```json
+{
+  "new_stamp_ids": [],
+  "pretty": {
+    "meta_keys": [],
+    "meta_sep": " ",
+    "legacy_stamp_format": { "parts": [
+      {"Literal": "["},
+      "DateYYYY", {"Literal": "-"}, "DateMM", {"Literal": "-"}, "DateDD",
+      {"Literal": " "},
+      "TimeHH", {"Literal": ":"}, "TimeMM", {"Literal": ":"}, "TimeSS",
+      {"Literal": "] "},
+      "Level"
+    ]}
+  }
+}
+```
+
+Exemple: stocker `time`, `level`, `cwd` à la capture, et afficher `level` + `cwd` en pretty :
+
+```json
+{
+  "new_stamp_ids": ["time", "level", "cwd"],
+  "pretty": {
+    "meta_keys": ["level", "cwd"],
+    "meta_sep": " ",
+    "legacy_stamp_format": { "parts": [] }
+  }
+}
+```
+
+Providers intégrés (IDs disponibles) :
+- `time` (timestamp epoch seconds, string)
+- `date` (date locale, `YYYY-MM-DD`)
+- `datetime` (datetime locale, `YYYY-MM-DDTHH:MM:SS±TZ`)
+- `level` (ex: `INFO`)
+- `source` (source du stamp si présent, sinon chaîne vide)
+- `cwd` (répertoire courant au moment du `new`)
 
 ## Plusieurs fichiers `.bif`
 
