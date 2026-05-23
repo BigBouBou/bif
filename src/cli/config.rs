@@ -103,7 +103,7 @@ impl GlobalConfig {
 /// - On Windows, use APPDATA when present.
 ///
 /// File name is `bif/config.json`.
-fn default_config_path() -> std::io::Result<PathBuf> {
+pub fn default_config_path() -> std::io::Result<PathBuf> {
     // Windows: %APPDATA%\bif\config.json
     if cfg!(windows) {
         if let Ok(appdata) = std::env::var("APPDATA") {

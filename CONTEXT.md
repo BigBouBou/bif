@@ -158,51 +158,57 @@ You are updating `CONTEXT.md` for your future self (another instance of you). Fo
    - Template stamps: define stamp as format string over known fields/meta keys.
    - Optional command stamps: execute external command at `new` only (security risk; gate behind explicit opt-in).
 
-#### Agent coordination prompts (copy/paste)
+#### Agent coordination prompts (copy/paste) — Global + local config (JSON), inherited by subdirectories
 
 NOTE: run agents in order. Each agent must:
 - read `bif/CONTEXT.md` first
 - keep changes scoped to the files listed for that step
 - run unit tests (or at least `cargo test`) and report failures
-- avoid changing the raw `read` behavior
+- preserve raw `read` behavior (script-friendly output must not regress)
+
+Config requirements (decided):
+- JSON only.
+- A local config is tracked by a CWD dotfile named `.bif-config`.
+- Local config applies to subdirectories by searching parent directories for the nearest `.bif-config`.
+- The path stored in `.bif-config` is a RELATIVE path, resolved relative to the directory containing that `.bif-config`.
+- If `.bif-config` already exists, overwrite it and print an explicit message.
 
 Step 0 — Coordinator prompt (use before delegating)
-- "Read `bif/CONTEXT.md`. Produce an ordered implementation checklist for Steps 1–5 below. For each step, list files to edit, new types/APIs, and acceptance tests. Do NOT modify code."
+- Agent 0 prompt:
+  - "Read `bif/CONTEXT.md`. Produce an ordered implementation checklist for Steps 1–5 below (local/global config). For each step, list: files to edit, new types/APIs, edge cases, and acceptance tests. Do NOT modify code."
+  - Write-scope: none (no code changes)
 
-Step 1 — Record + META_JSON (serde) foundation
+Step 1 — Config resolution layer (effective config = local-or-global)
 - Agent 1 prompt:
-  - "Read `bif/CONTEXT.md`. Implement META_JSON as an OPTIONAL 4th field in the entry record. Update `bif/src/domain/entry.rs` to parse both legacy 3-field and extended 4-field formats. Add `Entry.meta: BTreeMap<String,String>` (or equivalent). Use JSON for META (add `serde`/`serde_json` in `bif/Cargo.toml`). Ensure META is escaped/unescaped with the existing field escaping scheme. Add unit tests for: legacy roundtrip unchanged; meta roundtrip; invalid JSON error." 
-  - Write-scope: `bif/src/domain/entry.rs`, `bif/Cargo.toml` (+ any new domain test module if needed).
+  - "Read `bif/CONTEXT.md`. Implement effective config resolution (JSON only): local config tracked by a CWD dotfile `.bif-config`, inherited by subdirectories by searching parent directories. `.bif-config` stores a relative path (relative to the directory where the `.bif-config` file lives) pointing to a JSON config file. If `.bif-config` exists but points to missing/invalid JSON, return a clear error mentioning paths. Add a new module (e.g. `bif/src/cli/config_resolver.rs`) with: `ConfigOrigin` enum (Local/Global/Default) including paths; `EffectiveConfig { cfg: GlobalConfig, origin: ConfigOrigin }`; and `load_effective_config(cwd: &Path) -> io::Result<EffectiveConfig>` which performs the parent-walk search (stop at FS root). Do not wire commands yet. Add unit tests using temp dirs for: no `.bif-config` => uses global/default; `.bif-config` in parent => child dir uses parent local config; invalid JSON => error; missing referenced file => error."
+  - Write-scope: `bif/src/cli/config_resolver.rs` (new) + `bif/src/cli.rs` / `bif/src/cli/mod.rs` exports if needed + tests only.
 
-Step 2 — Global config loading + hashing
+Step 2 — Wire effective config into `new` and `read --pretty`
 - Agent 2 prompt:
-  - "Read `bif/CONTEXT.md`. Implement GLOBAL config loading (user-level). Add `bif/src/cli/config.rs` (or `bif/src/domain/config.rs`) defining the config struct (stamps to compute on `new`, pretty layout/order). Implement canonicalization + hashing (stable bytes -> SHA-256 hex) to compute `_cfg_hash`. Add tests for hash stability (same config => same hash). Do not wire into commands yet." 
-  - Write-scope: config module file(s) only (+ `bif/Cargo.toml` if adding hashing deps).
+  - "Read `bif/CONTEXT.md`. Wire the effective config resolver into the execution paths for `bif new` and `bif read --pretty`: replace any direct `GlobalConfig::load_global()` calls with `load_effective_config(current_dir)` so local config (inherited) is used when present. Ensure `_cfg_hash` is computed from the effective config bytes. Preserve raw `read` behavior unchanged. Add/adjust CLI-level tests to cover: running `new` in a child directory uses parent local config for provider selection; running `read --pretty` in a child directory uses parent local config for pretty layout."
+  - Write-scope: `bif/src/cli/command.rs` + CLI tests (`bif/src/cli/command_new_tests.rs`, `bif/src/cli/command_read_pretty_tests.rs`) only.
 
-Step 3 — Stamp providers executed on `new` (capture-time)
+Step 3 — `bif config show`
 - Agent 3 prompt:
-  - "Read `bif/CONTEXT.md`. Implement a stamp provider registry executed on `bif new`. Create `bif/src/domain/stamp_provider.rs` (or `domain/stamps/`). Providers compute string values (e.g. `time`, `date`, `datetime`, `level`, `source`, `cwd`). Update `bif/src/cli/command.rs` `Command::NEW` to load global config, compute `_cfg_hash`, run configured providers, and store results into `Entry.meta` (including `_cfg_hash`). Ensure writing remains one-line safe via Entry serialization. Add unit tests for providers and for `new` populating meta." 
-  - Write-scope: provider module + `bif/src/cli/command.rs`.
+  - "Read `bif/CONTEXT.md`. Implement `bif config show` at the CLI layer. It must print the origin of the active config: if local (tracked) => show the `.bif-config` file location found by parent-walk + the resolved JSON config path; else global => show the global config path (or say 'default' if none exists). Use the effective config resolver from Step 1 (no duplicated logic). Add parsing tests and execution tests capturing stdout."
+  - Write-scope: `bif/src/cli/command.rs` + CLI tests only.
 
-Step 4 — `read --pretty` consumes META + compatibility check
+Step 4 — `bif config set <path> --local` (track local config)
 - Agent 4 prompt:
-  - "Read `bif/CONTEXT.md`. Update `bif read --pretty` to prefer stored `Entry.meta` for rendering. Load global config and compute current `_cfg_hash`. For each entry: if meta missing => fallback to existing `domain::stamp_format` rendering from canonical `Stamp` (legacy). If meta present and `_cfg_hash` mismatches => print a clear warning (or error; follow the policy in CONTEXT) and still render best-effort or skip (make behavior explicit). If meta JSON invalid => pretty-mode formatting error. Keep raw `read` unchanged. Add tests for: legacy entry pretty; meta entry pretty; cfg mismatch behavior." 
-  - Write-scope: `bif/src/cli/command.rs`, `bif/src/domain/stamp_format.rs` (if needed for meta rendering helpers).
+  - "Read `bif/CONTEXT.md`. Implement `bif config set ./mon_config.json --local`. Behavior: validate target path exists and is a file (relative to current dir); write/overwrite `.bif-config` in the current directory with the relative path string (relative), followed by newline. If `.bif-config` already exists, overwrite it and print an explicit message to stdout (e.g. 'Updated local config tracking: ...'). Add tests: creates `.bif-config`, overwrites existing with message, and `config show` now reports local."
+  - Write-scope: `bif/src/cli/command.rs` (+ optional small helper in `bif/src/storage/` for `.bif-config` I/O) + tests.
 
-Step 5 — Config-driven stamp selection + layout (no CLI flags)
+Step 5 — `bif init --config ./mon_config.json` (create local config as copy of global, then track)
 - Agent 5 prompt:
-  - "Read `bif/CONTEXT.md`. Wire global config into both `new` (which providers run) and `read --pretty` (which meta keys to display, and ordering/layout). If introducing a format DSL, keep it strict and test it heavily. Update README only if behavior changes visibly. Add integration-ish tests at CLI parse/execution layer if feasible." 
-  - Write-scope: config module + `bif/src/cli/command.rs` + any new domain parsing/rendering modules.
-- GOAL: allow user-selected, modular stamps.
-  - Stamps are created at `new` time (capture-time) and stored in the record.
-  - Stamps are consulted/rendered at `read` time (view-time), especially `read --pretty`.
+  - "Read `bif/CONTEXT.md`. Extend `bif init` parsing/execution with `--config <path>` (JSON only). Behavior: run normal init (create log + track it) as today. If `--config path` is provided: load the GLOBAL config file if it exists, else use `GlobalConfig::default()`; write the JSON to `<path>` (refuse if destination exists, like create_new), then write/overwrite `.bif-config` to track that local config path (relative). Add tests for: init creates config file, `.bif-config` points to it, and `config show` reports local."
+  - Write-scope: `bif/src/cli/command.rs`, `bif/src/cli/config.rs` (only if a helper is needed), tests. Avoid touching unrelated modules.
 
 - IMPORTANT CONSTRAINT: preserve existing record format compatibility.
   - Keep `Entry` line format stable: `<STAMP>\t<TAGS>\t<BODY>` with body escaping (see `domain/entry.rs`).
   - Keep existing `Stamp` record format parseable: `<TIMESTAMP>|<LEVEL>|<SOURCE?>`.
   - Add an extension mechanism for additional stamps without breaking old logs (see plan below).
 
-- Current status (from code): presentation-layer stamp formatting exists (`domain/stamp_format.rs`) and `read --pretty` uses it.
+- Current status (from code): presentation-layer stamp formatting exists (`domain/stamp_format.rs`) and `read` uses it (pretty mode).
   - This is currently NOT user-configurable and does NOT add new stored stamps.
 
 - Status: FOUNDATION IMPLEMENTED (presentation-layer first)
@@ -212,8 +218,8 @@ Step 5 — Config-driven stamp selection + layout (no CLI flags)
   - Timestamp interpretation: parse `Stamp.timestamp` as epoch seconds and render in UTC; if parse fails/negative, date/time parts fall back to the raw timestamp string.
 
 - CLI surface area (minimal) now exists:
-  - `bif read` default remains raw record output (unchanged).
-  - `bif read --pretty` parses record lines with `Entry::from_record()` and prints: `<pretty_stamp>\t<body>`.
+  - `bif read --ugly` prints raw record output unchanged.
+  - `bif read` parses record lines with `Entry::from_record()` and prints: `<pretty_stamp>\t<body>`.
 
 - NEXT ARCHITECTURE (VISION): extensible, stored stamps
   - Requirement (user decision): stamps must be computed on `new` and stored; `read` only consults what was stored.
@@ -249,7 +255,7 @@ Step 5 — Config-driven stamp selection + layout (no CLI flags)
 - Config + customization DSL (DEFERRED; but required for user selection)
   - Not implemented: config loading (e.g. `.bif.toml` / XDG).
   - Not implemented: `--format` / stamp-selection DSL.
-  - Next: introduce config that selects which stamps to compute on `new` and how to render on `read --pretty`.
+  - Next: introduce config that selects which stamps to compute on `new` and how to render on `read`.
 
 ### Existing functionality status (already DONE)
 - `new <body>` behavior:
@@ -262,13 +268,12 @@ Step 5 — Config-driven stamp selection + layout (no CLI flags)
   - TODO: allow tracking by relative/absolute path? (decision)
 
 - `read`:
-  - DONE: `read` supports (RAW; unchanged):
-    - `read` => print entire tracked file (raw)
-    - `read 1` / `read -1` => print last record only
-    - `read 2` => print last 2 records
-    - `read -2` => print 2nd-to-last record only
-  - DONE: `read --pretty` supports the same selectors but prints a presentation view:
-    - Output: `<pretty_stamp>\t<body>` (stamp rendered by `domain::stamp_format`)
+  - DONE: `read` supports (pretty; default):
+    - `read` => print entire tracked file (pretty)
+    - `read 1` / `read -1` => print last record only (pretty)
+    - `read 2` => print last 2 records (pretty)
+    - `read -2` => print 2nd-to-last record only (pretty)
+  - DONE: `read --ugly` supports the same selectors but prints raw record line(s) unchanged.
   - Storage strategy: read whole file or slice `.lines()` / helper fns; raw mode prints record line(s) exactly.
 
 - `delete`:

@@ -30,6 +30,7 @@ pub enum Command {
     // Shows the help message
     INIT {
         name_of_new_log: Option<String>,
+        config_path: Option<String>,
     },
     // Intialises a new .bif file.
     TRACK {
@@ -49,6 +50,12 @@ pub enum Command {
         pretty: bool,
     },
     // Reads the current .bif file (default: entire file).
+    CONFIG_SHOW,
+    // Shows the active config origin (local/global/default) and paths.
+    CONFIG_SET_LOCAL {
+        path: String,
+    },
+    // Tracks a local config JSON path for this directory by writing `.bif-config`.
 }
 
 impl Command {
@@ -68,9 +75,19 @@ impl Command {
                 match input.len() {
                     1 => Some(Command::INIT {
                         name_of_new_log: None,
+                        config_path: None,
                     }),
                     2 => Some(Command::INIT {
                         name_of_new_log: Some(input[1].clone()),
+                        config_path: None,
+                    }),
+                    3 if input[1] == "--config" => Some(Command::INIT {
+                        name_of_new_log: None,
+                        config_path: Some(input[2].clone()),
+                    }),
+                    4 if input[2] == "--config" => Some(Command::INIT {
+                        name_of_new_log: Some(input[1].clone()),
+                        config_path: Some(input[3].clone()),
                     }),
                     _ => None,
                 }
@@ -169,6 +186,26 @@ impl Command {
                     _ => None,
                 }
             }
+            "config" => {
+                // Supported:
+                // - `bif config show`
+                // - `bif config set <path> --local`
+                //   where <path> is relative to the current directory
+                match input.as_slice() {
+                    [_, sub] if sub == "show" => Some(Command::CONFIG_SHOW),
+
+                    // `bif config set ./mon_config.json --local`
+                    [_, sub, path, flag] if sub == "set" && flag == "--local" => {
+                        Some(Command::CONFIG_SET_LOCAL { path: path.clone() })
+                    }
+                    // Allow flag before path as well: `bif config set --local ./cfg.json`
+                    [_, sub, flag, path] if sub == "set" && flag == "--local" => {
+                        Some(Command::CONFIG_SET_LOCAL { path: path.clone() })
+                    }
+
+                    _ => None,
+                }
+            }
             _ => Some(Command::NEW {
                 body: input.join(" "),
             }),
@@ -196,10 +233,57 @@ impl Command {
                 Ok(())
             }
 
-            Command::INIT { name_of_new_log } => {
+            Command::INIT {
+                name_of_new_log,
+                config_path,
+            } => {
                 // Normalize/validate at the domain boundary.
                 let file_name =
                     domain::log_filename::normalize_log_filename(name_of_new_log.as_deref())?;
+
+                // Optionally create a local config JSON file (copied from global/default)
+                // and track it via `.bif-config`.
+                //
+                // This must happen *before* creating the log file, so if we fail we don't leave
+                // the repo half-initialized.
+                if let Some(rel_str) = config_path.as_deref() {
+                    let rel = std::path::Path::new(rel_str);
+                    if rel.as_os_str().is_empty() {
+                        return Err(CliError::InvalidArgs {
+                            message: "config path cannot be empty".to_string(),
+                        });
+                    }
+                    if rel.is_absolute() {
+                        return Err(CliError::InvalidArgs {
+                            message: "config path must be relative to the current directory"
+                                .to_string(),
+                        });
+                    }
+
+                    let cwd = std::env::current_dir()
+                        .map_err(crate::storage::storage_error::StorageError::from)?;
+
+                    // Load the GLOBAL config file if it exists, else default.
+                    let src_cfg = crate::cli::config::GlobalConfig::load_global()
+                        .map_err(crate::storage::storage_error::StorageError::from)?;
+                    let json_bytes = src_cfg.canonical_json_bytes();
+
+                    // Refuse to overwrite an existing file.
+                    let dest_path = cwd.join(rel);
+                    let mut f = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&dest_path)
+                        .map_err(crate::storage::storage_error::StorageError::from)?;
+                    use std::io::Write as _;
+                    f.write_all(&json_bytes)
+                        .map_err(crate::storage::storage_error::StorageError::from)?;
+
+                    // Track local config path (overwrite `.bif-config`).
+                    let dotfile = cwd.join(".bif-config");
+                    std::fs::write(&dotfile, format!("{}\n", rel.display()))
+                        .map_err(crate::storage::storage_error::StorageError::from)?;
+                }
 
                 // Storage operation: create the file in the current working directory.
                 //
@@ -250,20 +334,21 @@ impl Command {
                 let stamp =
                     domain::entry::Stamp::new(timestamp, domain::entry::EntryLevel::INFO, None);
 
-                // Load global config (default if missing) and compute `_cfg_hash`.
-                let cfg = crate::cli::config::GlobalConfig::load_global()
-                    .map_err(crate::storage::storage_error::StorageError::from)?;
-                let cfg_hash = cfg.cfg_hash_hex();
-
-                // Run configured stamp providers.
+                // Resolve effective config for the current directory (local config, inherited).
+                // `_cfg_hash` must reflect the effective config bytes used for provider selection.
                 let cwd = std::env::current_dir()
                     .map_err(crate::storage::storage_error::StorageError::from)?;
+                let eff = crate::cli::config_resolver::load_effective_config(&cwd)
+                    .map_err(crate::storage::storage_error::StorageError::from)?;
+                let cfg_hash = eff.cfg.cfg_hash_hex();
+
+                // Run configured stamp providers.
                 let provider_ctx = crate::domain::stamp_provider::ProviderContext {
                     stamp: stamp.clone(),
                     cwd,
                 };
                 let reg = crate::domain::stamp_provider::Registry::default();
-                let mut meta = reg.compute_meta_for_ids(&cfg.new_stamp_ids, &provider_ctx);
+                let mut meta = reg.compute_meta_for_ids(&eff.cfg.new_stamp_ids, &provider_ctx);
                 meta.insert("_cfg_hash".to_string(), cfg_hash);
 
                 let mut entry = domain::entry::Entry::new(stamp, body.clone());
@@ -299,6 +384,118 @@ impl Command {
                         )
                         .map_err(crate::storage::storage_error::StorageError::from)?;
                     }
+                }
+
+                Ok(())
+            }
+
+            Command::CONFIG_SHOW => {
+                let cwd = std::env::current_dir()
+                    .map_err(crate::storage::storage_error::StorageError::from)?;
+                let eff = crate::cli::config_resolver::load_effective_config(&cwd)
+                    .map_err(crate::storage::storage_error::StorageError::from)?;
+
+                match eff.origin {
+                    crate::cli::config_resolver::ConfigOrigin::Local {
+                        dotfile_path,
+                        json_path,
+                    } => {
+                        writeln!(out, "local").map_err(|e| CliError::InvalidArgs {
+                            message: format!("stdout write error: {e}"),
+                        })?;
+                        writeln!(out, ".bif-config: {}", dotfile_path.display()).map_err(|e| {
+                            CliError::InvalidArgs {
+                                message: format!("stdout write error: {e}"),
+                            }
+                        })?;
+                        writeln!(out, "config: {}", json_path.display()).map_err(|e| {
+                            CliError::InvalidArgs {
+                                message: format!("stdout write error: {e}"),
+                            }
+                        })?;
+                    }
+                    crate::cli::config_resolver::ConfigOrigin::Global => {
+                        writeln!(out, "global").map_err(|e| CliError::InvalidArgs {
+                            message: format!("stdout write error: {e}"),
+                        })?;
+                        // Best-effort: show global path; if it doesn't exist, treat as default.
+                        let p = crate::cli::config::default_config_path()
+                            .map_err(crate::storage::storage_error::StorageError::from)?;
+                        if p.exists() {
+                            writeln!(out, "config: {}", p.display()).map_err(|e| {
+                                CliError::InvalidArgs {
+                                    message: format!("stdout write error: {e}"),
+                                }
+                            })?;
+                        } else {
+                            writeln!(out, "config: default").map_err(|e| {
+                                CliError::InvalidArgs {
+                                    message: format!("stdout write error: {e}"),
+                                }
+                            })?;
+                        }
+                    }
+                    crate::cli::config_resolver::ConfigOrigin::Default => {
+                        writeln!(out, "default").map_err(|e| CliError::InvalidArgs {
+                            message: format!("stdout write error: {e}"),
+                        })?;
+                        writeln!(out, "config: default").map_err(|e| CliError::InvalidArgs {
+                            message: format!("stdout write error: {e}"),
+                        })?;
+                    }
+                }
+
+                Ok(())
+            }
+
+            Command::CONFIG_SET_LOCAL { path } => {
+                let cwd = std::env::current_dir()
+                    .map_err(crate::storage::storage_error::StorageError::from)?;
+
+                let rel = std::path::Path::new(path);
+                if rel.as_os_str().is_empty() {
+                    return Err(CliError::InvalidArgs {
+                        message: "config path cannot be empty".to_string(),
+                    });
+                }
+                if rel.is_absolute() {
+                    return Err(CliError::InvalidArgs {
+                        message: "config path must be relative to the current directory"
+                            .to_string(),
+                    });
+                }
+
+                let target = cwd.join(rel);
+                let meta = std::fs::metadata(&target).map_err(|err| CliError::InvalidArgs {
+                    message: format!(
+                        "config path '{}' does not exist (relative to '{}'): {err}",
+                        rel.display(),
+                        cwd.display()
+                    ),
+                })?;
+                if !meta.is_file() {
+                    return Err(CliError::InvalidArgs {
+                        message: format!("config path '{}' is not a file", rel.display()),
+                    });
+                }
+
+                let dotfile = cwd.join(".bif-config");
+                let existed = dotfile.exists();
+                std::fs::write(&dotfile, format!("{}\n", rel.display()))
+                    .map_err(|err| crate::storage::storage_error::StorageError::from(err))?;
+
+                if existed {
+                    writeln!(out, "Updated local config tracking: {}", rel.display()).map_err(
+                        |e| CliError::InvalidArgs {
+                            message: format!("stdout write error: {e}"),
+                        },
+                    )?;
+                } else {
+                    writeln!(out, "Tracked local config: {}", rel.display()).map_err(|e| {
+                        CliError::InvalidArgs {
+                            message: format!("stdout write error: {e}"),
+                        }
+                    })?;
                 }
 
                 Ok(())
@@ -350,10 +547,12 @@ impl Command {
 
                 // Pretty mode (presentation-layer only): parse record lines and render.
                 // Prefer config-defined meta layout; fall back to legacy stamp format.
-                let cfg = crate::cli::config::GlobalConfig::load_global()
+                let cwd = std::env::current_dir()
                     .map_err(crate::storage::storage_error::StorageError::from)?;
-                let current_cfg_hash = cfg.cfg_hash_hex();
-                let pretty_cfg = cfg.pretty.clone();
+                let eff = crate::cli::config_resolver::load_effective_config(&cwd)
+                    .map_err(crate::storage::storage_error::StorageError::from)?;
+                let current_cfg_hash = eff.cfg.cfg_hash_hex();
+                let pretty_cfg = eff.cfg.pretty.clone();
 
                 fn render_pretty_stamp_from_meta(
                     entry: &domain::entry::Entry,
